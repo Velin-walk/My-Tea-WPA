@@ -1,0 +1,35 @@
+name: Deploy Study Flow PWA
+
+on:
+  push:
+    branches: ["main"] # Or your branch name
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps: deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # Use v4 but ensure it's the latest minor version
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        # v3/v4 of this action is now standard for Node 24
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.' # Upload the root directory containing index.html, manifest, and sw.js
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

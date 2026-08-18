@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Study Flow PWA</title>
+  <link rel="manifest" href="manifest.json">
+  <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+  <style>
+    :root {
+      --primary: #4285f4; --success: #34a853; --danger: #ea4335; --warning: #fbbc05;
+      --bg: #f8f9fa; --text: #202124; --cal-event: #00acc1;
+    }
+    body { font-family: 'Segoe UI', sans-serif; padding: 0; margin: 0; background: var(--bg); color: var(--text); }
+    .dashboard-container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 1350px; margin: 0 auto; padding: 20px; }
+    @media (max-width: 1100px) { .dashboard-container { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 750px) { .dashboard-container { grid-template-columns: 1fr; padding: 10px; } }
+    
+    .card { background: white; width: 100%; max-width: 420px; margin: 0 auto; padding: 20px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); text-align: center; box-sizing: border-box; }
+    .timer-card-horizontal { grid-column: 1 / -1; max-width: 100% !important; }
+    
+    h3 { margin: 0 0 15px 0; font-size: 14px; color: #5f6368; text-transform: uppercase; letter-spacing: 1px; }
+    button { padding: 10px 20px; cursor: pointer; border: 1px solid #f0f0f0; border-radius: 16px; font-weight: 600; transition: all 0.3s; background: #fdfdfd; display: flex; align-items: center; gap: 8px; }
+    button:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-start { color: var(--success); } .btn-stop { color: var(--danger); }
+    
+    input { padding: 8px; border: 2px solid #eee; border-radius: 8px; text-align: center; }
+
+    /* Gauge & UI Elements */
+    .gauge-wrapper { position: relative; width: 300px; height: 300px; margin: 0 auto; }
+    .gauge-bg { fill: none; stroke: #f0f0f0; stroke-width: 60; }
+    .gauge-liquid { fill: var(--primary); fill-opacity: 0.3; transition: all 1s; }
+    .timer-running .gauge-liquid { animation: waveMove 3s infinite linear; fill-opacity: 0.6; }
+    @keyframes waveMove { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+    
+    .cup-container { margin-left: 20px; position: relative; width: 45px; height: 35px; border: 3px solid #555; border-radius: 0 0 18px 18px; }
+    .tea-fill { position: absolute; bottom: 0; left: 0; width: 100%; background: #D2691E; transition: height 0.5s; border-radius: 0 0 15px 15px; }
+    
+    .heatmap-grid { display: grid; grid-template-columns: repeat(26, 11px); gap: 3px; justify-content: center; }
+    .heatmap-day { width: 11px; height: 11px; background: #eee; border-radius: 2px; }
+    .lvl-1 { background: #9be9a8; } .lvl-2 { background: #40c463; } .lvl-3 { background: #30a14e; } .lvl-4 { background: #216e39; }
+
+    .schedule-info { background: #f0f7ff; border-left: 4px solid var(--primary); padding: 12px; border-radius: 8px; margin: 12px 0; font-size: 13px; text-align: left; }
+    .schedule-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 12px; }
+    .schedule-study { background: var(--primary); color: white; padding: 4px 8px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+
+  <div class="dashboard-container">
+    
+    <!-- TIMERS -->
+    <div class="card timer-card-horizontal">
+      <h3>⏱️ Study Timers</h3>
+      <div style="display: flex; align-items: center; justify-content: center; gap: 40px; flex-wrap: wrap;">
+        
+        <div style="display: flex; align-items: center; gap: 15px;">
+          <div style="text-align: left;">
+            <div style="font-size: 11px; color: #aaa;">Target</div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <input type="number" id="targetMins" value="25" style="width: 50px;">
+              <div id="targetDisplay" style="font-size: 24px; font-weight: bold; font-family: monospace;">25:00</div>
+            </div>
+          </div>
+          <button id="startT" class="btn-start" onclick="TimerEngine.startTarget()">START</button>
+          <button id="stopT" class="btn-stop" onclick="TimerEngine.stopTarget()">STOP</button>
+          <div class="cup-container"><div id="targetTea" class="tea-fill" style="height: 0%;"></div></div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 15px;">
+          <div style="text-align: left;">
+            <div style="font-size: 11px; color: #aaa;">Stopwatch</div>
+            <div id="openDisplay" style="font-size: 24px; font-weight: bold; font-family: monospace;">00:00:00</div>
+          </div>
+          <button id="startO" class="btn-start" onclick="TimerEngine.startOpen()">START</button>
+          <button id="stopO" class="btn-stop" onclick="TimerEngine.stopOpen()">STOP</button>
+          <div class="cup-container"><div id="openTea" class="tea-fill" style="height: 0%;"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DAILY GOAL -->
+    <div class="card">
+      <h3>🎯 Daily Goal</h3>
+      <div class="gauge-wrapper">
+        <svg width="300" height="300" style="transform: scaleY(-1);">
+          <circle id="liquidFill" class="gauge-liquid" cx="150" cy="150" r="120"></circle>
+          <circle class="gauge-bg" cx="150" cy="150" r="120"></circle>
+          <clipPath id="gaugeClip"><rect id="liquidLevel" x="0" y="0" width="300" height="0" /></clipPath>
+          <circle cx="150" cy="150" r="120" fill="url(#gaugeClip)" />
+        </svg>
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);">
+          <span id="goalPercent" style="font-size: 40px; font-weight: bold;">0</span>%
+        </div>
+      </div>
+      <div style="margin-top: 10px;">
+        <input type="number" id="goalInput" value="4" step="0.5" style="width: 50px;"> hrs
+        <button onclick="DB.setGoal()" style="display: inline-block; padding: 5px 10px;">Save</button>
+      </div>
+    </div>
+
+    <!-- 24H WATCH -->
+    <div class="card">
+      <h3>⏰ 24h Study Watch</h3>
+      <svg id="watch24h" width="280" height="280" viewBox="0 0 280 280">
+        <circle cx="140" cy="140" r="130" fill="#f8f9fa" stroke="#eee" />
+        <g id="watchSegments"></g>
+        <circle cx="140" cy="140" r="60" fill="white" />
+        <text id="watchTotal" x="140" y="145" text-anchor="middle" font-size="24" font-weight="bold" fill="#4285f4">0h</text>
+      </svg>
+    </div>
+
+    <!-- SCHEDULE -->
+    <div class="card">
+      <h3>📅 Today's Schedule</h3>
+      <input type="time" id="endTimeInput" onchange="UI.renderSchedule()">
+      <div id="scheduleContainer"></div>
+    </div>
+
+    <!-- CHARTS -->
+    <div class="card" style="grid-column: span 2; max-width: 100%;">
+      <h3>📊 History (Last 7 Days)</h3>
+      <div id="chart_weekly" style="height: 250px;"></div>
+    </div>
+
+    <div class="card">
+      <h3>🔥 Consistency</h3>
+      <div id="heatmapGrid" class="heatmap-grid"></div>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1; max-width: 100%;">
+        <button onclick="DB.exportData()" style="margin: 0 auto;">📥 Download Backup (JSON)</button>
+    </div>
+
+  </div>
+
+  <script>
+    /* ================= DB ENGINE (LOCAL STORAGE) ================= */
+    const DB = {
+      saveLog: (type, durationSecs) => {
+        let logs = JSON.parse(localStorage.getItem('study_logs') || '[]');
+        logs.push({
+          timestamp: Date.now(),
+          type: type,
+          duration: durationSecs / 3600 // store as hours
+        });
+        localStorage.setItem('study_logs', JSON.stringify(logs));
+        UI.refreshAll();
+      },
+      getLogs: () => JSON.parse(localStorage.getItem('study_logs') || '[]'),
+      setGoal: () => {
+        const val = document.getElementById('goalInput').value;
+        localStorage.setItem('study_goal', val);
+        UI.refreshAll();
+      },
+      getGoal: () => parseFloat(localStorage.getItem('study_goal') || '4'),
+      exportData: () => {
+        const data = localStorage.getItem('study_logs');
+        const blob = new Blob([data], {type: 'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'study_backup.json'; a.click();
+      }
+    };
+
+    /* ================= TIMER ENGINE ================= */
+    let tInt, oInt;
+    const TimerEngine = {
+      targetSecs: 0,
+      openSecs: 0,
+      
+      startTarget: () => {
+        const mins = document.getElementById('targetMins').value;
+        TimerEngine.targetSecs = mins * 60;
+        document.body.classList.add('timer-running');
+        tInt = setInterval(() => {
+          TimerEngine.targetSecs--;
+          document.getElementById('targetDisplay').innerText = TimerEngine.fmt(TimerEngine.targetSecs);
+          document.getElementById('targetTea').style.height = (1 - (TimerEngine.targetSecs / (mins*60))) * 100 + "%";
+          if(TimerEngine.targetSecs <= 0) TimerEngine.stopTarget();
+        }, 1000);
+      },
+      stopTarget: () => {
+        clearInterval(tInt);
+        const mins = document.getElementById('targetMins').value;
+        DB.saveLog('Target', (mins * 60) - TimerEngine.targetSecs);
+        document.body.classList.remove('timer-running');
+        document.getElementById('targetDisplay').innerText = mins + ":00";
+        document.getElementById('targetTea').style.height = "0%";
+      },
+      startOpen: () => {
+        TimerEngine.openSecs = 0;
+        oInt = setInterval(() => {
+          TimerEngine.openSecs++;
+          document.getElementById('openDisplay').innerText = TimerEngine.fmt(TimerEngine.openSecs, true);
+          document.getElementById('openTea').style.height = ((TimerEngine.openSecs % 3600) / 3600 * 100) + "%";
+        }, 1000);
+      },
+      stopOpen: () => {
+        clearInterval(oInt);
+        DB.saveLog('Open', TimerEngine.openSecs);
+        document.getElementById('openDisplay').innerText = "00:00:00";
+        document.getElementById('openTea').style.height = "0%";
+      },
+      fmt: (s, h=false) => {
+        let hrs = Math.floor(s/3600), m = Math.floor((s%3600)/60), sc = s%60;
+        return h ? `${hrs.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${sc.toString().padStart(2,'0')}` : 
+                   `${m.toString().padStart(2,'0')}:${sc.toString().padStart(2,'0')}`;
+      }
+    };
+
+    /* ================= UI & ANALYTICS ENGINE ================= */
+    const UI = {
+      refreshAll: () => {
+        UI.renderGauge();
+        UI.renderWatch();
+        UI.renderWeeklyChart();
+        UI.renderHeatmap();
+        UI.renderSchedule();
+      },
+
+      renderGauge: () => {
+        const goal = DB.getGoal();
+        const todayLogs = DB.getLogs().filter(l => new Date(l.timestamp).toDateString() === new Date().toDateString());
+        const total = todayLogs.reduce((acc, curr) => acc + curr.duration, 0);
+        const perc = Math.min(100, Math.round((total / goal) * 100));
+        document.getElementById('goalPercent').innerText = perc;
+        document.getElementById('liquidFill').style.transform = `scaleY(${perc/100})`;
+      },
+
+      renderWatch: () => {
+        const segments = document.getElementById('watchSegments');
+        segments.innerHTML = '';
+        const todayLogs = DB.getLogs().filter(l => new Date(l.timestamp).toDateString() === new Date().toDateString());
+        
+        let totalH = 0;
+        todayLogs.forEach(log => {
+          const date = new Date(log.timestamp);
+          const startH = date.getHours() + (date.getMinutes()/60);
+          const durH = log.duration;
+          totalH += durH;
+
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', UI.describeArc(140, 140, 120, (startH/24)*360, ((startH+durH)/24)*360));
+          path.setAttribute('fill', 'none');
+          path.setAttribute('stroke', '#4285f4');
+          path.setAttribute('stroke-width', '20');
+          segments.appendChild(path);
+        });
+        document.getElementById('watchTotal').innerText = totalH.toFixed(1) + "h";
+      },
+
+      describeArc: (x, y, r, startAngle, endAngle) => {
+        const start = UI.polarToCartesian(x, y, r, endAngle - 90);
+        const end = UI.polarToCartesian(x, y, r, startAngle - 90);
+        const arcSweep = endAngle - startAngle <= 180 ? "0" : "1";
+        return ["M", start.x, start.y, "A", r, r, 0, arcSweep, 0, end.x, end.y].join(" ");
+      },
+
+      polarToCartesian: (x, y, r, angleInDegrees) => {
+        const rad = (angleInDegrees) * Math.PI / 180.0;
+        return { x: x + (r * Math.cos(rad)), y: y + (r * Math.sin(rad)) };
+      },
+
+      renderWeeklyChart: () => {
+        google.charts.load('current', {packages:['corechart']});
+        google.charts.setOnLoadCallback(() => {
+          const logs = DB.getLogs();
+          const dataArray = [['Day', 'Hours']];
+          for(let i=6; i>=0; i--) {
+            const d = new Date(); d.setDate(d.getDate() - i);
+            const dayStr = d.toLocaleDateString('en-US', {weekday:'short'});
+            const dayTotal = logs.filter(l => new Date(l.timestamp).toDateString() === d.toDateString())
+                                 .reduce((a,b) => a + b.duration, 0);
+            dataArray.push([dayStr, dayTotal]);
+          }
+          const data = google.visualization.arrayToDataTable(dataArray);
+          new google.visualization.ColumnChart(document.getElementById('chart_weekly')).draw(data, {
+            legend: 'none', colors:['#4285f4'], chartArea:{width:'80%', height:'70%'},
+            vAxis: {minValue: 0}
+          });
+        });
+      },
+
+      renderHeatmap: () => {
+        const grid = document.getElementById('heatmapGrid');
+        grid.innerHTML = '';
+        const logs = DB.getLogs();
+        for(let i=181; i>=0; i--) {
+          const d = new Date(); d.setDate(d.getDate() - i);
+          const total = logs.filter(l => new Date(l.timestamp).toDateString() === d.toDateString()).reduce((a,b)=>a+b.duration, 0);
+          let lvl = total > 4 ? 4 : total > 2 ? 3 : total > 0.5 ? 2 : total > 0 ? 1 : 0;
+          const day = document.createElement('div');
+          day.className = `heatmap-day lvl-${lvl}`;
+          grid.appendChild(day);
+        }
+      },
+
+      renderSchedule: () => {
+        const endInput = document.getElementById('endTimeInput').value;
+        if(!endInput) return;
+        const goal = DB.getGoal();
+        const todayTotal = DB.getLogs().filter(l => new Date(l.timestamp).toDateString() === new Date().toDateString()).reduce((a,b)=>a+b.duration, 0);
+        const remain = Math.max(0, goal - todayTotal);
+        
+        let html = `<div class="schedule-info"><strong>${remain.toFixed(1)}h</strong> remaining to goal.</div>`;
+        const sessionDur = remain / 3; // split into 3 sessions
+        let curr = new Date();
+        for(let i=1; i<=3; i++) {
+            html += `<div class="schedule-row">
+                        <span>${curr.getHours()}:${curr.getMinutes().toString().padStart(2,'0')}</span>
+                        <span class="schedule-study">Session ${i}</span>
+                        <span>${(sessionDur*60).toFixed(0)} mins</span>
+                     </div>`;
+            curr.setMinutes(curr.getMinutes() + (sessionDur*60) + 15); // Add study + 15m break
+        }
+        document.getElementById('scheduleContainer').innerHTML = html;
+      }
+    };
+
+    // Register Service Worker for PWA
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+
+    window.onload = () => {
+      document.getElementById('goalInput').value = DB.getGoal();
+      UI.refreshAll();
+      // Set default end time to 8 hours from now
+      const d = new Date(); d.setHours(d.getHours()+8);
+      document.getElementById('endTimeInput').value = d.getHours().toString().padStart(2,'0') + ":" + d.getMinutes().toString().padStart(2,'0');
+      UI.renderSchedule();
+    };
+  </script>
+</body>
+</html>

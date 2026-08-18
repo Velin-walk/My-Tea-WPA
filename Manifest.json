@@ -1,0 +1,16 @@
+{
+  "name": "Study Flow Dashboard",
+  "short_name": "StudyFlow",
+  "description": "Professional Study Timer and Analytics",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#f8f9fa",
+  "theme_color": "#4285f4",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3553/3553313.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,14 +1,7 @@
-const CACHE_NAME = 'study-v1';
-const ASSETS = [
-  'index.html',
-  'manifest.json',
-  'https://www.gstatic.com/charts/loader.js'
-];
-
-self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
+const CACHE_NAME = 'study-flow-v1';
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(['index.html', 'manifest.json'])));
 });
-
-self.addEventListener('fetch', (e) => {
+self.addEventListener('fetch', e => {
   e.respondWith(caches.match(e.request).then(res => res || fetch(e.request)));
 });

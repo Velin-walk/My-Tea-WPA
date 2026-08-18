@@ -136,202 +136,279 @@
   </div>
 
   <script>
-    /* ================= DB ENGINE (LOCAL STORAGE) ================= */
-    const DB = {
-      saveLog: (type, durationSecs) => {
-        let logs = JSON.parse(localStorage.getItem('study_logs') || '[]');
-        logs.push({
-          timestamp: Date.now(),
-          type: type,
-          duration: durationSecs / 3600 // store as hours
-        });
-        localStorage.setItem('study_logs', JSON.stringify(logs));
-        UI.refreshAll();
-      },
-      getLogs: () => JSON.parse(localStorage.getItem('study_logs') || '[]'),
-      setGoal: () => {
-        const val = document.getElementById('goalInput').value;
-        localStorage.setItem('study_goal', val);
-        UI.refreshAll();
-      },
-      getGoal: () => parseFloat(localStorage.getItem('study_goal') || '4'),
-      exportData: () => {
-        const data = localStorage.getItem('study_logs');
-        const blob = new Blob([data], {type: 'application/json'});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = 'study_backup.json'; a.click();
-      }
-    };
+   /* ================= LOCAL STORAGE DATABASE ENGINE ================= */
+const DB = {
+  get: (key, def) => JSON.parse(localStorage.getItem(key)) || def,
+  save: (key, val) => localStorage.setItem(key, JSON.stringify(val)),
+  
+  // Log a new session
+  logSession: (type, durationStr, targetMins) => {
+    let logs = DB.get('study_logs', []);
+    const [m, s] = durationStr.split(':').map(Number);
+    const hrs = (m * 60 + s) / 3600;
+    logs.push({ 
+      timestamp: Date.now(), 
+      type, 
+      hrs, 
+      target: parseFloat(targetMins) || 0 
+    });
+    DB.save('study_logs', logs);
+    refreshAll();
+  }
+};
 
-    /* ================= TIMER ENGINE ================= */
-    let tInt, oInt;
-    const TimerEngine = {
-      targetSecs: 0,
-      openSecs: 0,
-      
-      startTarget: () => {
-        const mins = document.getElementById('targetMins').value;
-        TimerEngine.targetSecs = mins * 60;
-        document.body.classList.add('timer-running');
-        tInt = setInterval(() => {
-          TimerEngine.targetSecs--;
-          document.getElementById('targetDisplay').innerText = TimerEngine.fmt(TimerEngine.targetSecs);
-          document.getElementById('targetTea').style.height = (1 - (TimerEngine.targetSecs / (mins*60))) * 100 + "%";
-          if(TimerEngine.targetSecs <= 0) TimerEngine.stopTarget();
-        }, 1000);
-      },
-      stopTarget: () => {
-        clearInterval(tInt);
-        const mins = document.getElementById('targetMins').value;
-        DB.saveLog('Target', (mins * 60) - TimerEngine.targetSecs);
-        document.body.classList.remove('timer-running');
-        document.getElementById('targetDisplay').innerText = mins + ":00";
-        document.getElementById('targetTea').style.height = "0%";
-      },
-      startOpen: () => {
-        TimerEngine.openSecs = 0;
-        oInt = setInterval(() => {
-          TimerEngine.openSecs++;
-          document.getElementById('openDisplay').innerText = TimerEngine.fmt(TimerEngine.openSecs, true);
-          document.getElementById('openTea').style.height = ((TimerEngine.openSecs % 3600) / 3600 * 100) + "%";
-        }, 1000);
-      },
-      stopOpen: () => {
-        clearInterval(oInt);
-        DB.saveLog('Open', TimerEngine.openSecs);
-        document.getElementById('openDisplay').innerText = "00:00:00";
-        document.getElementById('openTea').style.height = "0%";
-      },
-      fmt: (s, h=false) => {
-        let hrs = Math.floor(s/3600), m = Math.floor((s%3600)/60), sc = s%60;
-        return h ? `${hrs.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${sc.toString().padStart(2,'0')}` : 
-                   `${m.toString().padStart(2,'0')}:${sc.toString().padStart(2,'0')}`;
-      }
-    };
+/* ================= TIMER LOGIC ================= */
+let targetInt, openInt, targetSecs = 0, openSecs = 0, initialTargetSecs = 0;
+let targetEndTime, openStartTime;
 
-    /* ================= UI & ANALYTICS ENGINE ================= */
-    const UI = {
-      refreshAll: () => {
-        UI.renderGauge();
-        UI.renderWatch();
-        UI.renderWeeklyChart();
-        UI.renderHeatmap();
-        UI.renderSchedule();
-      },
+function saveGoal() {
+  const newGoal = parseFloat(document.getElementById('goalInput').value);
+  DB.save('daily_goal', newGoal);
+  refreshAll();
+  alert('Goal updated!');
+}
 
-      renderGauge: () => {
-        const goal = DB.getGoal();
-        const todayLogs = DB.getLogs().filter(l => new Date(l.timestamp).toDateString() === new Date().toDateString());
-        const total = todayLogs.reduce((acc, curr) => acc + curr.duration, 0);
-        const perc = Math.min(100, Math.round((total / goal) * 100));
-        document.getElementById('goalPercent').innerText = perc;
-        document.getElementById('liquidFill').style.transform = `scaleY(${perc/100})`;
-      },
+function resetTargetDisplay() {
+  const mins = document.getElementById('targetMins').value;
+  document.getElementById('targetDisplay').innerText = `${mins.toString().padStart(2, '0')}:00`;
+}
 
-      renderWatch: () => {
-        const segments = document.getElementById('watchSegments');
-        segments.innerHTML = '';
-        const todayLogs = DB.getLogs().filter(l => new Date(l.timestamp).toDateString() === new Date().toDateString());
-        
-        let totalH = 0;
-        todayLogs.forEach(log => {
-          const date = new Date(log.timestamp);
-          const startH = date.getHours() + (date.getMinutes()/60);
-          const durH = log.duration;
-          totalH += durH;
+function startTarget(isRestoring = false) {
+  if (targetInt) clearInterval(targetInt);
+  document.body.classList.add('timer-running');
+  const minsInput = document.getElementById('targetMins').value;
+  if (!isRestoring) {
+    initialTargetSecs = minsInput * 60;
+    targetEndTime = Date.now() + (initialTargetSecs * 1000);
+    DB.save('target_state', { start: Date.now(), dur: initialTargetSecs });
+  }
+  toggleButtons('T', true);
+  targetInt = setInterval(() => {
+    targetSecs = Math.ceil((targetEndTime - Date.now()) / 1000);
+    let progress = ((initialTargetSecs - targetSecs) / initialTargetSecs) * 100;
+    document.getElementById('targetTea').style.height = Math.min(100, progress) + '%';
+    if (targetSecs <= 0) { stopTarget(); } 
+    else { document.getElementById('targetDisplay').innerText = fmt(targetSecs); }
+  }, 500);
+}
 
-          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          path.setAttribute('d', UI.describeArc(140, 140, 120, (startH/24)*360, ((startH+durH)/24)*360));
-          path.setAttribute('fill', 'none');
-          path.setAttribute('stroke', '#4285f4');
-          path.setAttribute('stroke-width', '20');
-          segments.appendChild(path);
-        });
-        document.getElementById('watchTotal').innerText = totalH.toFixed(1) + "h";
-      },
+function stopTarget() {
+  clearInterval(targetInt); targetInt = null;
+  document.body.classList.remove('timer-running');
+  const spent = Math.max(0, initialTargetSecs - targetSecs);
+  const logDuration = fmt(spent);
+  DB.logSession("Target", logDuration, document.getElementById('targetMins').value);
+  DB.save('target_state', null);
+  resetTargetDisplay();
+  toggleButtons('T', false);
+}
 
-      describeArc: (x, y, r, startAngle, endAngle) => {
-        const start = UI.polarToCartesian(x, y, r, endAngle - 90);
-        const end = UI.polarToCartesian(x, y, r, startAngle - 90);
-        const arcSweep = endAngle - startAngle <= 180 ? "0" : "1";
-        return ["M", start.x, start.y, "A", r, r, 0, arcSweep, 0, end.x, end.y].join(" ");
-      },
+function startOpen(isRestoring = false) {
+  if (openInt) clearInterval(openInt);
+  document.body.classList.add('timer-running');
+  if (!isRestoring) { openStartTime = Date.now(); DB.save('open_state', openStartTime); }
+  toggleButtons('O', true);
+  openInt = setInterval(() => {
+    openSecs = Math.floor((Date.now() - openStartTime) / 1000);
+    document.getElementById('openTea').style.height = ((openSecs % 3600) / 3600 * 100) + '%';
+    document.getElementById('openDisplay').innerText = fmt(openSecs, true);
+  }, 500);
+}
 
-      polarToCartesian: (x, y, r, angleInDegrees) => {
-        const rad = (angleInDegrees) * Math.PI / 180.0;
-        return { x: x + (r * Math.cos(rad)), y: y + (r * Math.sin(rad)) };
-      },
+function stopOpen() {
+  clearInterval(openInt); openInt = null;
+  document.body.classList.remove('timer-running');
+  DB.logSession("Open", fmt(openSecs), 0);
+  DB.save('open_state', null);
+  document.getElementById('openDisplay').innerText = "00:00:00";
+  toggleButtons('O', false);
+}
 
-      renderWeeklyChart: () => {
-        google.charts.load('current', {packages:['corechart']});
-        google.charts.setOnLoadCallback(() => {
-          const logs = DB.getLogs();
-          const dataArray = [['Day', 'Hours']];
-          for(let i=6; i>=0; i--) {
-            const d = new Date(); d.setDate(d.getDate() - i);
-            const dayStr = d.toLocaleDateString('en-US', {weekday:'short'});
-            const dayTotal = logs.filter(l => new Date(l.timestamp).toDateString() === d.toDateString())
-                                 .reduce((a,b) => a + b.duration, 0);
-            dataArray.push([dayStr, dayTotal]);
-          }
-          const data = google.visualization.arrayToDataTable(dataArray);
-          new google.visualization.ColumnChart(document.getElementById('chart_weekly')).draw(data, {
-            legend: 'none', colors:['#4285f4'], chartArea:{width:'80%', height:'70%'},
-            vAxis: {minValue: 0}
-          });
-        });
-      },
+/* ================= ANALYTICS & VISUALS ================= */
+function refreshAll() {
+  loadGoalGauge();
+  load24HourWatch();
+  loadChartDaily();
+  loadChartWeekly();
+  loadHeatmap();
+  generateSchedule();
+}
 
-      renderHeatmap: () => {
-        const grid = document.getElementById('heatmapGrid');
-        grid.innerHTML = '';
-        const logs = DB.getLogs();
-        for(let i=181; i>=0; i--) {
-          const d = new Date(); d.setDate(d.getDate() - i);
-          const total = logs.filter(l => new Date(l.timestamp).toDateString() === d.toDateString()).reduce((a,b)=>a+b.duration, 0);
-          let lvl = total > 4 ? 4 : total > 2 ? 3 : total > 0.5 ? 2 : total > 0 ? 1 : 0;
-          const day = document.createElement('div');
-          day.className = `heatmap-day lvl-${lvl}`;
-          grid.appendChild(day);
-        }
-      },
+function loadGoalGauge() {
+  const goal = DB.get('daily_goal', 4);
+  const logs = DB.get('study_logs', []);
+  const todayStr = new Date().toDateString();
+  const sessions = logs.filter(l => new Date(l.timestamp).toDateString() === todayStr).map(l => l.hrs);
+  const total = sessions.reduce((a, b) => a + b, 0);
+  const percent = Math.min(100, Math.round((total / goal) * 100));
+  
+  document.getElementById('goalPercent').innerText = percent;
+  document.getElementById('liquidLevel').setAttribute('height', (percent * 3));
+  document.getElementById('goalStatus').innerText = `${total.toFixed(1)} of ${goal}h done (${sessions.length} sessions)`;
+  
+  // Segment drawing
+  const segGroup = document.getElementById('gaugeSegments');
+  segGroup.innerHTML = '';
+  const circ = 2 * Math.PI * 120;
+  let offset = 0;
+  const colors = ['#4285f4', '#34a853', '#ea4335', '#fbbc05'];
+  sessions.forEach((h, i) => {
+    const dash = (h / goal) * circ;
+    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c.setAttribute('cx', '150'); c.setAttribute('cy', '150'); c.setAttribute('r', '120');
+    c.setAttribute('stroke', colors[i % colors.length]);
+    c.setAttribute('stroke-width', '60');
+    c.setAttribute('stroke-dasharray', `${dash} ${circ}`);
+    c.setAttribute('stroke-dashoffset', -offset);
+    c.setAttribute('fill', 'none');
+    segGroup.appendChild(c);
+    offset += dash;
+  });
+}
 
-      renderSchedule: () => {
-        const endInput = document.getElementById('endTimeInput').value;
-        if(!endInput) return;
-        const goal = DB.getGoal();
-        const todayTotal = DB.getLogs().filter(l => new Date(l.timestamp).toDateString() === new Date().toDateString()).reduce((a,b)=>a+b.duration, 0);
-        const remain = Math.max(0, goal - todayTotal);
-        
-        let html = `<div class="schedule-info"><strong>${remain.toFixed(1)}h</strong> remaining to goal.</div>`;
-        const sessionDur = remain / 3; // split into 3 sessions
-        let curr = new Date();
-        for(let i=1; i<=3; i++) {
-            html += `<div class="schedule-row">
-                        <span>${curr.getHours()}:${curr.getMinutes().toString().padStart(2,'0')}</span>
-                        <span class="schedule-study">Session ${i}</span>
-                        <span>${(sessionDur*60).toFixed(0)} mins</span>
-                     </div>`;
-            curr.setMinutes(curr.getMinutes() + (sessionDur*60) + 15); // Add study + 15m break
-        }
-        document.getElementById('scheduleContainer').innerHTML = html;
-      }
-    };
+function load24HourWatch() {
+  const logs = DB.get('study_logs', []);
+  const today = new Date().toDateString();
+  const sessions = logs.filter(l => new Date(l.timestamp).toDateString() === today)
+    .map(l => ({ 
+      start: new Date(l.timestamp).getHours() + new Date(l.timestamp).getMinutes()/60, 
+      hrs: l.hrs 
+    }));
 
-    // Register Service Worker for PWA
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js');
-    }
+  let totalH = sessions.reduce((a,b) => a+b.hrs, 0);
+  document.getElementById('watch24hTotal').innerText = totalH.toFixed(1) + 'h';
+  
+  const group = document.getElementById('hourSegments');
+  group.innerHTML = '<circle cx="140" cy="140" r="130" fill="#f8f9fa" />';
+  
+  const colors = ['#4285f4', '#34a853', '#ea4335', '#fbbc05'];
+  sessions.forEach((s, i) => {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', getArc(s.start, s.hrs, 130, 80));
+    path.setAttribute('fill', colors[i % colors.length]);
+    group.appendChild(path);
+  });
+}
 
-    window.onload = () => {
-      document.getElementById('goalInput').value = DB.getGoal();
-      UI.refreshAll();
-      // Set default end time to 8 hours from now
-      const d = new Date(); d.setHours(d.getHours()+8);
-      document.getElementById('endTimeInput').value = d.getHours().toString().padStart(2,'0') + ":" + d.getMinutes().toString().padStart(2,'0');
-      UI.renderSchedule();
-    };
+function getArc(sH, dH, out, inn) {
+  const sA = (sH / 24) * 360 - 90;
+  const eA = ((sH + dH) / 24) * 360 - 90;
+  const sR = (sA * Math.PI) / 180;
+  const eR = (eA * Math.PI) / 180;
+  const large = (dH / 24) > 0.5 ? 1 : 0;
+  return `M ${140+out*Math.cos(sR)} ${140+out*Math.sin(sR)} A ${out} ${out} 0 ${large} 1 ${140+out*Math.cos(eR)} ${140+out*Math.sin(eR)} L ${140+inn*Math.cos(eR)} ${140+inn*Math.sin(eR)} A ${inn} ${inn} 0 ${large} 0 ${140+inn*Math.cos(sR)} ${140+inn*Math.sin(sR)} Z`;
+}
+
+/* ================= CHART ADAPTERS ================= */
+function loadChartDaily() {
+  const logs = DB.get('study_logs', []);
+  const today = new Date().toDateString();
+  const todayLogs = logs.filter(l => new Date(l.timestamp).toDateString() === today);
+  
+  const data = [['Session', 'Hours', {role:'annotation'}]];
+  todayLogs.forEach((l, i) => data.push([`S${i+1}`, l.hrs, (l.hrs*60).toFixed(0)+'m']));
+  
+  if (data.length > 1) {
+    const chartData = google.visualization.arrayToDataTable(data);
+    new google.visualization.ColumnChart(document.getElementById('chart_div_daily')).draw(chartData, { legend:'none', bar:{groupWidth:'70%'}, colors:['#4285f4'] });
+  }
+}
+
+function loadChartWeekly() {
+  const logs = DB.get('study_logs', []);
+  const data = [['Day', 'Hours', {role:'annotation'}]];
+  for(let i=6; i>=0; i--) {
+    const d = new Date(); d.setDate(d.getDate()-i);
+    const dayStr = d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+    const h = logs.filter(l => new Date(l.timestamp).toDateString() === d.toDateString()).reduce((a,b)=>a+b.hrs, 0);
+    data.push([dayStr, h, h > 0 ? h.toFixed(1)+'h' : '']);
+  }
+  const chartData = google.visualization.arrayToDataTable(data);
+  new google.visualization.ColumnChart(document.getElementById('chart_div_weekly')).draw(chartData, { legend:'none', colors:['#34a853'] });
+}
+
+function loadHeatmap() {
+  const logs = DB.get('study_logs', []);
+  const grid = document.getElementById('heatmapGrid');
+  grid.innerHTML = '';
+  for(let i=181; i>=0; i--) {
+    const d = new Date(); d.setDate(d.getDate()-i);
+    const h = logs.filter(l => new Date(l.timestamp).toDateString() === d.toDateString()).reduce((a,b)=>a+b.hrs, 0);
+    let lvl = h > 5 ? 4 : h > 3 ? 3 : h > 1 ? 2 : h > 0 ? 1 : 0;
+    const div = document.createElement('div');
+    div.className = `heatmap-day lvl-${lvl}`;
+    grid.appendChild(div);
+  }
+}
+
+/* ================= SCHEDULE LOGIC ================= */
+function generateSchedule() {
+  const endTimeInput = document.getElementById('endTimeInput').value;
+  if (!endTimeInput) return;
+  
+  const goal = DB.get('daily_goal', 4);
+  const logs = DB.get('study_logs', []);
+  const done = logs.filter(l => new Date(l.timestamp).toDateString() === new Date().toDateString()).reduce((a,b)=>a+b.hrs, 0);
+  const remain = Math.max(0, goal - done);
+  
+  const now = new Date();
+  const [h, m] = endTimeInput.split(':').map(Number);
+  let end = new Date(); end.setHours(h, m, 0);
+  if (end < now) end.setDate(end.getDate() + 1);
+  
+  const availH = (end - now) / 3600000;
+  const sessionCount = remain > 4 ? 4 : 3;
+  const studyH = remain / sessionCount;
+  
+  let html = `<div class="schedule-info"><strong>${remain.toFixed(1)}h</strong> remaining.</div>`;
+  let curr = new Date(now);
+  for(let i=0; i<sessionCount; i++) {
+    html += `<div class="schedule-row">
+      <span style="font-weight:bold; color:#4285f4">${curr.getHours()}:${curr.getMinutes().toString().padStart(2,'0')}</span>
+      <span class="schedule-block schedule-study">Session ${i+1}</span>
+      <span>${(studyH*60).toFixed(0)}m</span>
+    </div>`;
+    curr.setMinutes(curr.getMinutes() + (studyH * 60) + 15);
+  }
+  document.getElementById('scheduleContainer').innerHTML = html;
+}
+
+/* ================= HELPERS & INIT ================= */
+function fmt(s, hrs = false) {
+  let h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sc = s % 60;
+  let res = `${m.toString().padStart(2, '0')}:${sc.toString().padStart(2, '0')}`;
+  return hrs ? `${h.toString().padStart(2, '0')}:${res}` : res;
+}
+
+function toggleButtons(group, isRunning) {
+  document.getElementById('start' + group).disabled = isRunning;
+  if (group === 'T') document.getElementById('targetMins').disabled = isRunning;
+}
+
+function setDefaultEndTime() {
+  const d = new Date(); d.setHours(d.getHours() + 8);
+  document.getElementById('endTimeInput').value = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  generateSchedule();
+}
+
+window.onload = function() {
+  // Restore State
+  const tState = DB.get('target_state', null);
+  if (tState) {
+    targetEndTime = tState.start + (tState.dur * 1000);
+    initialTargetSecs = tState.dur;
+    if (targetEndTime > Date.now()) startTarget(true);
+  }
+  const oState = DB.get('open_state', null);
+  if (oState) { openStartTime = oState; startOpen(true); }
+
+  document.getElementById('goalInput').value = DB.get('daily_goal', 4);
+  google.charts.load('current', {packages:['corechart']});
+  google.charts.setOnLoadCallback(refreshAll);
+  setDefaultEndTime();
+  
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+};
   </script>
 </body>
 </html>

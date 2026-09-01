@@ -484,9 +484,14 @@
     </div>
      
     <div class="card">
-  <h3>⏰ Most Active Hours</h3>
-  <div id="activeHoursChart" style="height: 250px; width: 100%;"></div>
-</div>
+      <h3>⏰ Most Active Hours</h3>
+      <div style="margin-top: 40px;">
+        <div style="font-size: 9px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">🌅 Morning</div>
+        <div id="activeHoursChartAM" style="height: 170px; width: 100%;"></div>
+        <div style="font-size: 9px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin: 14px 0 6px 0;">🌙 Afternoon / Evening</div>
+        <div id="activeHoursChartPM" style="height: 170px; width: 100%;"></div>
+      </div>
+    </div>
 
     <div class="card">
       <h3>📊 Daily Analytics</h3>
@@ -1503,77 +1508,58 @@ updateRealTimeClock();
 function loadActiveHoursChart() {
   fetch(`${WEB_APP_URL}?action=getWatchData`).then(res => res.json()).then(sessions => {
     if (!sessions || sessions.length === 0) {
-      document.getElementById('activeHoursChart').innerHTML = '<div style="text-align: center; padding: 60px; color: var(--text-tertiary);">No data</div>';
+      const empty = '<div style="text-align: center; padding: 20px; color: var(--text-tertiary); font-size: 11px;">No data</div>';
+      document.getElementById('activeHoursChartAM').innerHTML = empty;
+      document.getElementById('activeHoursChartPM').innerHTML = empty;
       return;
     }
 
-    // Find earliest and latest session times
     let minHour = 24, maxHour = 0;
     sessions.forEach(sess => {
       if (typeof sess.hrs !== 'number' || sess.hrs <= 0) return;
-      const startHour = Math.floor(sess.start);
-      const endHour = Math.ceil(sess.start + sess.hrs);
-      minHour = Math.min(minHour, startHour);
-      maxHour = Math.max(maxHour, endHour);
+      minHour = Math.min(minHour, Math.floor(sess.start));
+      maxHour = Math.max(maxHour, Math.ceil(sess.start + sess.hrs));
     });
+    if (minHour === 24) return;
 
-    if (minHour === 24) return; // No valid sessions
-
-    // Count hours studied (relative to minHour)
     const hourlyStudy = {};
-    for (let h = minHour; h < maxHour; h++) { hourlyStudy[h] = 0; }
+    for (let h = minHour; h < maxHour; h++) hourlyStudy[h] = 0;
 
     sessions.forEach(sess => {
       if (typeof sess.hrs !== 'number' || sess.hrs <= 0) return;
-      
-      const startTime = sess.start;
-      const endTime = sess.start + sess.hrs;
-      
       for (let h = minHour; h < maxHour; h++) {
-        const hourStart = h;
-        const hourEnd = h + 1;
-        
-        const overlapStart = Math.max(startTime, hourStart);
-        const overlapEnd = Math.min(endTime, hourEnd);
-        
-        if (overlapEnd > overlapStart) {
-          const hoursInThisSlot = overlapEnd - overlapStart;
-          hourlyStudy[h] += hoursInThisSlot;
-        }
+        const overlap = Math.min(sess.start + sess.hrs, h + 1) - Math.max(sess.start, h);
+        if (overlap > 0) hourlyStudy[h] += overlap;
       }
     });
 
-    // Build chart data (starting from minHour)
-    const chartData = [['Hour', 'Hours Studied', { role: 'style' }]];
     const themeColors = getThemeColors();
-    
-    for (let h = minHour; h < maxHour; h++) {
-      const hourLabel = String(h).padStart(2, '0') + ':00';
-      const hours = parseFloat(hourlyStudy[h].toFixed(1));
-      const color = hours > 0 ? '#FC4C02' : 'rgba(0,0,0,0.1)';
-      chartData.push([hourLabel, hours, `color: ${color}`]);
+    const mid = 12; // Split at noon
+
+    function drawChart(containerId, fromHour, toHour) {
+      const chartData = [['Hour', 'Hours', { role: 'style' }]];
+      const barCount = toHour - fromHour;
+      for (let h = fromHour; h < toHour; h++) {
+        const hrs = parseFloat((hourlyStudy[h] || 0).toFixed(1));
+        chartData.push([String(h).padStart(2, '0') + ':00', hrs, `color: ${hrs > 0 ? '#FC4C02' : 'rgba(0,0,0,0.1)'}`]);
+      }
+      const dataTable = google.visualization.arrayToDataTable(chartData);
+      new google.visualization.ColumnChart(document.getElementById(containerId)).draw(dataTable, {
+        legend: 'none',
+        backgroundColor: 'transparent',
+        chartArea: { left: 30, top: 5, right: 5, bottom: 22, width: '92%', height: '78%' },
+        bar: { groupWidth: barCount > 8 ? '55%' : '70%' },
+        vAxis: { textPosition: 'none', gridlines: { color: 'rgba(0,0,0,0.04)' }, baselineColor: 'transparent' },
+        hAxis: { textStyle: { fontSize: 8, color: themeColors.text }, slantedText: barCount > 6, slantedTextAngle: 30, showTextEvery: barCount > 10 ? 2 : 1, gridlines: { color: 'transparent' } },
+        animation: { startup: true, duration: 500, easing: 'out' }
+      });
     }
 
-    const dataTable = google.visualization.arrayToDataTable(chartData);
-    new google.visualization.ColumnChart(document.getElementById('activeHoursChart')).draw(dataTable, {
-      legend: 'none',
-      backgroundColor: 'transparent',
-      chartArea: { width: '95%', height: '80%' },
-      vAxis: { 
-        title: 'Hours Studied',
-        titleTextStyle: { fontSize: 10, bold: true, color: themeColors.text },
-        gridlines: { color: 'rgba(0,0,0,0.05)' },
-        textStyle: { fontSize: 9, color: themeColors.text }
-      },
-      hAxis: { 
-        textStyle: { fontSize: 8, color: themeColors.text },
-        gridlines: { color: 'transparent' }
-      },
-      animation: { startup: true, duration: 600, easing: 'out' }
-    });
+    drawChart('activeHoursChartAM', minHour, Math.min(maxHour, mid));
+    drawChart('activeHoursChartPM', Math.max(minHour, mid), maxHour);
+
   }).catch(err => console.error('Active hours error:', err));
 }
-
   </script>
 </body>
 </html>
